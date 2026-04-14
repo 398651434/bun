@@ -941,9 +941,16 @@ async function spawnSafe(options) {
     if (!signalCode && exitCode === undefined) {
       subprocess.stdout.destroy();
       subprocess.stderr.destroy();
-      if (!subprocess.killed) {
-        subprocess.kill(9);
+      if (isWindows) {
+        try {
+          spawnSync("taskkill", ["/pid", String(subprocess.pid), "/T", "/F"], { stdio: "ignore" });
+        } catch {}
+      } else {
+        try {
+          process.kill(-subprocess.pid, "SIGKILL");
+        } catch {}
       }
+      if (!subprocess.killed) subprocess.kill(9);
     }
     resolve();
   };
@@ -970,6 +977,11 @@ async function spawnSafe(options) {
       }
       subprocess = spawn(command, args, {
         stdio: ["ignore", "pipe", "pipe"],
+        // New process group on POSIX so the timeout kill below can signal
+        // -pid and reap every descendant the test spawned (servers, helper
+        // bun processes), not just the direct child. Windows: detached has
+        // different semantics; taskkill /T handles the tree there instead.
+        detached: !isWindows,
         timeout,
         cwd,
         env,
