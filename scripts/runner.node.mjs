@@ -907,23 +907,17 @@ const activeSubprocesses = new Set();
 /**
  * Kill `proc` and every descendant it spawned. POSIX: spawnSafe uses
  * `detached: true` so the child leads its own process group; signalling
- * -pid reaches the whole group. Windows: taskkill /T walks the tree.
- * Falls back to killing just the direct child if the group kill throws
- * (ESRCH, EPERM, undefined pid on spawn failure).
- * @param {import("node:child_process").ChildProcess | undefined} proc
+ * -pid reaches the whole group. Windows: spawn() with detached:false puts
+ * the child in a libuv-managed Job Object, so ChildProcess.kill() already
+ * terminates the whole tree. ESRCH from kill(-pid) means the group is
+ * already gone — no fallback, since by then the PID may have been recycled.
+ * @param {import("node:child_process").ChildProcess} proc
  */
 function killTree(proc) {
   if (!proc?.pid) return;
   try {
-    if (isWindows) {
-      spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
-    } else {
-      process.kill(-proc.pid, "SIGKILL");
-    }
-    return;
-  } catch {}
-  try {
-    proc.kill(9);
+    if (isWindows) proc.kill();
+    else process.kill(-proc.pid, "SIGKILL");
   } catch {}
 }
 
