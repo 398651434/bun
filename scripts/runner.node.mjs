@@ -907,16 +907,17 @@ const activeSubprocesses = new Set();
 /**
  * Kill `proc` and every descendant it spawned. POSIX: spawnSafe uses
  * `detached: true` so the child leads its own process group; signalling
- * -pid reaches the whole group. Windows: spawn() with detached:false puts
- * the child in a libuv-managed Job Object, so ChildProcess.kill() already
- * terminates the whole tree. ESRCH from kill(-pid) means the group is
- * already gone — no fallback, since by then the PID may have been recycled.
+ * -pid reaches the whole group. Windows: `taskkill /T /F` walks the tree.
+ * (libuv's Job Object only reaps the tree when the *runner's* handle
+ * closes — i.e. on process.exit() — not when TerminateProcess() hits the
+ * child, so on the timeout path proc.kill() alone would leak grandchildren.)
+ * No fallback after a throw: by then the PID may have been recycled.
  * @param {import("node:child_process").ChildProcess} proc
  */
 function killTree(proc) {
   if (!proc?.pid) return;
   try {
-    if (isWindows) proc.kill();
+    if (isWindows) spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
     else process.kill(-proc.pid, "SIGKILL");
   } catch {}
 }
@@ -989,12 +990,14 @@ async function spawnSafe(options) {
       }
       subprocess = spawn(command, args, {
         stdio: ["ignore", "pipe", "pipe"],
-        // New process group on POSIX so the timeout kill below can signal
-        // -pid and reap every descendant the test spawned (servers, helper
-        // bun processes), not just the direct child. Windows: detached has
-        // different semantics; taskkill /T handles the tree there instead.
+        // New process group on POSIX so killTree can signal -pid and reap
+        // every descendant the test spawned (servers, helper bun processes),
+        // not just the direct child. Windows keeps detached:false so the
+        // child joins the runner's Job Object (tree dies on runner exit).
         detached: !isWindows,
-        timeout,
+        // No `timeout:` option here — Node's built-in timer would SIGTERM
+        // only the direct child and race ahead of our manual setTimeout
+        // below, bypassing killTree. The manual timer is the sole driver.
         cwd,
         env,
       });
