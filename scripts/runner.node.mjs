@@ -901,9 +901,6 @@ async function runTests() {
  * @property {number} [pid]
  */
 
-/** @type {Set<import("node:child_process").ChildProcess>} */
-const activeSubprocesses = new Set();
-
 /**
  * @param {SpawnOptions} options
  * @returns {Promise<SpawnResult>}
@@ -948,7 +945,6 @@ async function spawnSafe(options) {
         subprocess.kill(9);
       }
     }
-    activeSubprocesses.delete(subprocess);
     resolve();
   };
   await new Promise(resolve => {
@@ -979,7 +975,6 @@ async function spawnSafe(options) {
         env,
       });
       subprocess.on("spawn", () => {
-        activeSubprocesses.add(subprocess);
         timestamp = Date.now();
         timer = setTimeout(() => done(resolve), timeout);
       });
@@ -2355,12 +2350,6 @@ function isAlwaysFailure(error) {
 function onExit(signal) {
   const label = `${getAnsi("red")}Received ${signal}, exiting...${getAnsi("reset")}`;
   startGroup(label, () => {
-    for (const proc of activeSubprocesses) {
-      try {
-        if (isWindows) spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
-        else proc.kill(9);
-      } catch {}
-    }
     process.exit(getExitCode("cancel"));
   });
 }
