@@ -995,9 +995,7 @@ async function spawnSafe(options) {
         // not just the direct child. Windows keeps detached:false so the
         // child joins the runner's Job Object (tree dies on runner exit).
         detached: !isWindows,
-        // No `timeout:` option here — Node's built-in timer would SIGTERM
-        // only the direct child and race ahead of our manual setTimeout
-        // below, bypassing killTree. The manual timer is the sole driver.
+        timeout,
         cwd,
         env,
       });
