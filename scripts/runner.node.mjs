@@ -936,6 +936,7 @@ async function spawnSafe(options) {
     stdout = process.stdout.write.bind(process.stdout),
     stderr = process.stderr.write.bind(process.stderr),
     retries = 0,
+    processGroup = false,
   } = options;
   let exitCode;
   let signalCode;
@@ -962,7 +963,8 @@ async function spawnSafe(options) {
     if (!signalCode && exitCode === undefined) {
       subprocess.stdout.destroy();
       subprocess.stderr.destroy();
-      killTree(subprocess);
+      if (processGroup) killTree(subprocess);
+      else if (!subprocess.killed) subprocess.kill(9);
     }
     activeSubprocesses.delete(subprocess);
     resolve();
@@ -992,9 +994,10 @@ async function spawnSafe(options) {
         stdio: ["ignore", "pipe", "pipe"],
         // New process group on POSIX so killTree can signal -pid and reap
         // every descendant the test spawned (servers, helper bun processes),
-        // not just the direct child. Windows keeps detached:false so the
-        // child joins the runner's Job Object (tree dies on runner exit).
-        detached: !isWindows,
+        // not just the direct child. Opt-in (spawnBun sets it) — utility
+        // spawns (sysctl, gdb, install) don't need it. Windows keeps
+        // detached:false so the child joins the runner's Job Object.
+        detached: processGroup && !isWindows,
         timeout,
         cwd,
         env,
@@ -1218,6 +1221,7 @@ async function spawnBun(execPath, { args, cwd, timeout, env, stdout, stderr }) {
       env: bunEnv,
       stdout,
       stderr,
+      processGroup: true,
     });
     const newCores = options["coredump-upload"] ? readdirSync(coresDir).filter(c => !existingCores.includes(c)) : [];
     let crashes = "";
