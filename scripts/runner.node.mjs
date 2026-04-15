@@ -905,24 +905,6 @@ async function runTests() {
 const activeSubprocesses = new Set();
 
 /**
- * Kill `proc` and every descendant it spawned. POSIX: spawnSafe uses
- * `detached: true` so the child leads its own process group; signalling
- * -pid reaches the whole group. Windows: `taskkill /T /F` walks the tree.
- * (libuv's Job Object only reaps the tree when the *runner's* handle
- * closes — i.e. on process.exit() — not when TerminateProcess() hits the
- * child, so on the timeout path proc.kill() alone would leak grandchildren.)
- * No fallback after a throw: by then the PID may have been recycled.
- * @param {import("node:child_process").ChildProcess} proc
- */
-function killTree(proc) {
-  if (!proc?.pid) return;
-  try {
-    if (isWindows) spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
-    else process.kill(-proc.pid, "SIGKILL");
-  } catch {}
-}
-
-/**
  * @param {SpawnOptions} options
  * @returns {Promise<SpawnResult>}
  */
@@ -936,7 +918,6 @@ async function spawnSafe(options) {
     stdout = process.stdout.write.bind(process.stdout),
     stderr = process.stderr.write.bind(process.stderr),
     retries = 0,
-    processGroup = false,
   } = options;
   let exitCode;
   let signalCode;
@@ -963,8 +944,9 @@ async function spawnSafe(options) {
     if (!signalCode && exitCode === undefined) {
       subprocess.stdout.destroy();
       subprocess.stderr.destroy();
-      if (processGroup) killTree(subprocess);
-      else if (!subprocess.killed) subprocess.kill(9);
+      if (!subprocess.killed) {
+        subprocess.kill(9);
+      }
     }
     activeSubprocesses.delete(subprocess);
     resolve();
@@ -992,12 +974,6 @@ async function spawnSafe(options) {
       }
       subprocess = spawn(command, args, {
         stdio: ["ignore", "pipe", "pipe"],
-        // New process group on POSIX so killTree can signal -pid and reap
-        // every descendant the test spawned (servers, helper bun processes),
-        // not just the direct child. Opt-in (spawnBun sets it) — utility
-        // spawns (sysctl, gdb, install) don't need it. Windows keeps
-        // detached:false so the child joins the runner's Job Object.
-        detached: processGroup && !isWindows,
         timeout,
         cwd,
         env,
@@ -1221,7 +1197,6 @@ async function spawnBun(execPath, { args, cwd, timeout, env, stdout, stderr }) {
       env: bunEnv,
       stdout,
       stderr,
-      processGroup: true,
     });
     const newCores = options["coredump-upload"] ? readdirSync(coresDir).filter(c => !existingCores.includes(c)) : [];
     let crashes = "";
@@ -2380,7 +2355,12 @@ function isAlwaysFailure(error) {
 function onExit(signal) {
   const label = `${getAnsi("red")}Received ${signal}, exiting...${getAnsi("reset")}`;
   startGroup(label, () => {
-    for (const proc of activeSubprocesses) killTree(proc);
+    for (const proc of activeSubprocesses) {
+      try {
+        if (isWindows) spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+        else proc.kill(9);
+      } catch {}
+    }
     process.exit(getExitCode("cancel"));
   });
 }
