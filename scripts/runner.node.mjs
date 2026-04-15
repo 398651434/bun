@@ -901,6 +901,32 @@ async function runTests() {
  * @property {number} [pid]
  */
 
+/** @type {import("node:child_process").ChildProcess | undefined} */
+let activeSubprocess;
+
+/**
+ * Kill `proc` and every descendant it spawned. POSIX: spawnSafe uses
+ * `detached: true` so the child leads its own process group; signalling
+ * -pid reaches the whole group. Windows: taskkill /T walks the tree.
+ * Falls back to killing just the direct child if the group kill throws
+ * (ESRCH, EPERM, undefined pid on spawn failure).
+ * @param {import("node:child_process").ChildProcess | undefined} proc
+ */
+function killTree(proc) {
+  if (!proc?.pid) return;
+  try {
+    if (isWindows) {
+      spawnSync("taskkill", ["/pid", String(proc.pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      process.kill(-proc.pid, "SIGKILL");
+    }
+    return;
+  } catch {}
+  try {
+    proc.kill(9);
+  } catch {}
+}
+
 /**
  * @param {SpawnOptions} options
  * @returns {Promise<SpawnResult>}
@@ -941,17 +967,9 @@ async function spawnSafe(options) {
     if (!signalCode && exitCode === undefined) {
       subprocess.stdout.destroy();
       subprocess.stderr.destroy();
-      if (isWindows) {
-        try {
-          spawnSync("taskkill", ["/pid", String(subprocess.pid), "/T", "/F"], { stdio: "ignore" });
-        } catch {}
-      } else {
-        try {
-          process.kill(-subprocess.pid, "SIGKILL");
-        } catch {}
-      }
-      if (!subprocess.killed) subprocess.kill(9);
+      killTree(subprocess);
     }
+    activeSubprocess = undefined;
     resolve();
   };
   await new Promise(resolve => {
@@ -987,6 +1005,7 @@ async function spawnSafe(options) {
         env,
       });
       subprocess.on("spawn", () => {
+        activeSubprocess = subprocess;
         timestamp = Date.now();
         timer = setTimeout(() => done(resolve), timeout);
       });
@@ -2362,6 +2381,7 @@ function isAlwaysFailure(error) {
 function onExit(signal) {
   const label = `${getAnsi("red")}Received ${signal}, exiting...${getAnsi("reset")}`;
   startGroup(label, () => {
+    killTree(activeSubprocess);
     process.exit(getExitCode("cancel"));
   });
 }
