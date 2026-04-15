@@ -901,8 +901,8 @@ async function runTests() {
  * @property {number} [pid]
  */
 
-/** @type {import("node:child_process").ChildProcess | undefined} */
-let activeSubprocess;
+/** @type {Set<import("node:child_process").ChildProcess>} */
+const activeSubprocesses = new Set();
 
 /**
  * Kill `proc` and every descendant it spawned. POSIX: spawnSafe uses
@@ -969,7 +969,7 @@ async function spawnSafe(options) {
       subprocess.stderr.destroy();
       killTree(subprocess);
     }
-    activeSubprocess = undefined;
+    activeSubprocesses.delete(subprocess);
     resolve();
   };
   await new Promise(resolve => {
@@ -1005,7 +1005,7 @@ async function spawnSafe(options) {
         env,
       });
       subprocess.on("spawn", () => {
-        activeSubprocess = subprocess;
+        activeSubprocesses.add(subprocess);
         timestamp = Date.now();
         timer = setTimeout(() => done(resolve), timeout);
       });
@@ -2381,7 +2381,7 @@ function isAlwaysFailure(error) {
 function onExit(signal) {
   const label = `${getAnsi("red")}Received ${signal}, exiting...${getAnsi("reset")}`;
   startGroup(label, () => {
-    killTree(activeSubprocess);
+    for (const proc of activeSubprocesses) killTree(proc);
     process.exit(getExitCode("cancel"));
   });
 }
